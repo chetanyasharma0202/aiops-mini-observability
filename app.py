@@ -8,6 +8,10 @@ REQUESTS = Counter("demo_http_requests_total", "Simulated requests", ["status"])
 LATENCY = Gauge("demo_request_latency_seconds", "Latest simulated request latency")
 ERROR_RATIO = Gauge("demo_http_error_ratio", "Latest simulated HTTP error ratio")
 CPU = Gauge("demo_cpu_usage_percent", "Simulated CPU usage percentage")
+DB_LATENCY = Gauge(
+    "demo_database_latency_seconds",
+    "Simulated database query latency"
+)
 ANOMALY = Gauge("aiops_anomaly_detected", "Rolling detector anomaly flag")
 window = deque(maxlen=20)
 lock = threading.Lock()
@@ -19,34 +23,178 @@ def telemetry():
     while True:
         tick += 1
         mode = os.getenv("SIMULATION_MODE", "normal").lower()
-        if mode == "latency" and tick % 10 >= 5:
-            latency, cpu, err = random.uniform(1.2, 2), random.uniform(75, 95), random.uniform(.03, .12)
-        elif mode == "errors" and tick % 10 >= 5:
-            latency, cpu, err = random.uniform(.3, .8), random.uniform(25, 60), random.uniform(.2, .4)
+        
+        if mode == "database":
+            db_latency = random.uniform(0.8, 1.5)
+            latency = db_latency + random.uniform(0.1, 0.3)
+            cpu = random.uniform(25, 55)
+            err = random.uniform(0.16, 0.30)
+
+        elif mode == "cpu":
+            db_latency = random.uniform(0.04, 0.12)
+            cpu = random.uniform(90, 98)
+            latency = random.uniform(1.0, 1.8)
+            err = random.uniform(0.02, 0.10)
+
+        elif mode == "errors":
+            db_latency = random.uniform(0.04, 0.12)
+            latency = random.uniform(0.3, 0.8)
+            cpu = random.uniform(25, 60)
+            err = random.uniform(0.2, 0.4)
+
         else:
-            latency, cpu, err = random.uniform(.06, .22), random.uniform(15, 55), random.uniform(0, .02)
+            db_latency = random.uniform(0.04, 0.12)
+            latency = random.uniform(0.06, 0.22)
+            cpu = random.uniform(15, 55)
+            err = random.uniform(0.0, 0.02)
+
+        DB_LATENCY.set(db_latency)
         LATENCY.set(latency); CPU.set(cpu); ERROR_RATIO.set(err)
         REQUESTS.labels(status="5xx" if err > .05 else "2xx").inc(random.randint(4, 15))
         window.append(latency)
         detected, reason = False, "Signals within expected range"
-        if len(window) >= 8:
-            prev = list(window)[:-1]
-            avg = sum(prev) / len(prev)
-            sd = math.sqrt(sum((x-avg)**2 for x in prev) / len(prev))
-            if latency > max(avg + 3*sd, avg*2.5, .7):
-                detected, reason = True, f"Latency spike: {latency:.2f}s vs baseline {avg:.2f}s"
-            elif err > .15:
-                detected, reason = True, f"Elevated HTTP error ratio: {err:.1%}"
-            elif cpu > 85:
-                detected, reason = True, f"High CPU signal: {cpu:.1f}%"
+        
+        # Step 1: Identify abnormal signals
+        high_db_latency = db_latency > 0.5
+        high_cpu = cpu > 85
+        high_errors = err > 0.15
+        high_app_latency = latency > 0.7
+
+        # Step 2: Build evidence and investigate likely causes
+        signals = []
+        findings = []
+
+        if high_db_latency:
+            signals.append("database_latency")
+
+        if high_app_latency:
+            signals.append("application_latency")
+
+        if high_cpu:
+            signals.append("cpu")
+
+        if high_errors:
+            signals.append("error_rate")
+
+        # Correlation rule 1: slow database, slow app, CPU not saturated
+        if high_db_latency and high_app_latency and not high_cpu:
+            findings.append({
+                "signal": "database_slowdown",
+                "evidence": (
+                    f"DB latency {db_latency:.2f}s, "
+                    f"app latency {latency:.2f}s, "
+                    f"CPU {cpu:.1f}%"
+                ),
+                "possible_cause": "Slow database queries or database contention",
+                "recommended_check": (
+                    "Check query duration, DB CPU, connections, "
+                    "locks and slow-query logs"
+                )
+            })
+
+        # Correlation rule 2: high CPU with slow app, DB is responsive
+        if high_cpu and high_app_latency and not high_db_latency:
+            findings.append({
+                "signal": "application_cpu_saturation",
+                "evidence": (
+                    f"CPU {cpu:.1f}%, app latency {latency:.2f}s, "
+                    f"DB latency {db_latency:.2f}s"
+                ),
+                "possible_cause": "Application CPU saturation",
+                "recommended_check": (
+                    "Inspect process CPU, worker/thread usage, "
+                    "recent deployments and CPU profiles"
+                )
+            })
+
+        # Correlation rule 3: errors without obvious DB/CPU pressure
+        if high_errors and not high_db_latency and not high_cpu:
+            findings.append({
+                "signal": "application_or_dependency_errors",
+                "evidence": (
+                    f"Error ratio {err:.1%}, "
+                    f"DB latency {db_latency:.2f}s, CPU {cpu:.1f}%"
+                ),
+                "possible_cause": (
+                    "Application exceptions or failing dependencies"
+                ),
+                "recommended_check": (
+                    "Inspect HTTP 5xx logs, exception traces "
+                    "and dependency error responses"
+                )
+            })
+
+        # Additional evidence when errors accompany database slowdown
+        if high_errors and high_db_latency:
+            findings.append({
+                "signal": "database_related_errors",
+                "evidence": (
+                    f"Error ratio {err:.1%}, DB latency {db_latency:.2f}s"
+                ),
+                "possible_cause": (
+                    "Database delays may be contributing to request failures"
+                ),
+                "recommended_check": (
+                    "Correlate failed requests with query timeouts, "
+                    "connection pool exhaustion and DB logs"
+                )
+            })
+
+        # Detect high latency even when no specific cause matches
+        if high_app_latency and not findings:
+            findings.append({
+                "signal": "high_application_latency",
+                "evidence": f"App latency {latency:.2f}s",
+                "possible_cause": (
+                    "An application or downstream dependency is slow"
+                ),
+                "recommended_check": (
+                    "Inspect request traces, application logs and dependency latency"
+                )
+            })
+
+        detected = len(findings) > 0
+        reason = (
+            "; ".join(item["signal"] for item in findings)
+            if detected else "Signals within expected range"
+        )
+
         ANOMALY.set(int(detected))
+
         with lock:
-            incident = ({"status":"OPEN", "service":APP, "severity":"HIGH" if err>.15 or cpu>85 else "MEDIUM",
-                         "reason":reason, "latency_seconds":round(latency,3), "cpu_percent":round(cpu,1),
-                         "error_ratio":round(err,4), "timestamp":int(time.time()),
-                         "suggested_action":"Check recent deployments, dependency latency, CPU saturation and application logs; validate before remediation."}
-                        if detected else {"status":"NORMAL", "service":APP, "reason":reason, "timestamp":int(time.time())})
-        if detected: print(json.dumps(incident), flush=True)
+            if detected:
+                incident = {
+                    "status": "OPEN",
+                    "service": APP,
+                    "severity": (
+                        "HIGH" if high_errors or high_cpu or high_db_latency
+                        else "MEDIUM"
+                    ),
+                    "signals": signals,
+                    "findings": findings,
+                    "latency_seconds": round(latency, 3),
+                    "db_latency_seconds": round(db_latency, 3),
+                    "cpu_percent": round(cpu, 1),
+                    "error_ratio": round(err, 4),
+                    "timestamp": int(time.time()),
+                    "note": (
+                        "Possible causes are hypotheses, not confirmed root causes."
+                    )
+                }
+            else:
+                incident = {
+                    "status": "NORMAL",
+                    "service": APP,
+                    "reason": reason,
+                    "signals": [],
+                    "findings": [],
+                    "timestamp": int(time.time())
+                }
+        if detected:
+            with lock:
+                report = dict(incident)
+            print(json.dumps(report), flush=True)
+
         time.sleep(5)
 
 class Handler(BaseHTTPRequestHandler):
@@ -60,7 +208,16 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/aiops/status":
             with lock: data=dict(incident)
             self.send_json(200,data)
-        elif self.path == "/": self.send_json(200, {"service":APP,"endpoints":["/health","/metrics","/aiops/status"]})
+        elif self.path == "/aiops/incidents":
+            with lock:
+                active = dict(incident) if incident.get("status") == "OPEN" else None
+            self.send_json(200, {
+                "active": active,
+                "total": 0,
+                "incidents": [],
+                "note": "Incident history tracking has not been enabled yet."
+            })
+        elif self.path == "/": self.send_json(200, {"service":APP,"endpoints":["/health","/metrics","/aiops/status","/aiops/incidents"]})
         else: self.send_json(404, {"error":"not found"})
     def log_message(self, fmt, *args): print(fmt % args, flush=True)
 
