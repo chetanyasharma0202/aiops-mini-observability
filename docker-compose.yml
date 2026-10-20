@@ -1,0 +1,33 @@
+services:
+  app:
+    build: .
+    environment:
+      APP_NAME: demo-checkout
+      SIMULATION_MODE: ${SIMULATION_MODE:-normal}
+    ports: ["8000:8000"]
+    restart: unless-stopped
+  prometheus:
+    image: prom/prometheus:latest
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    ports: ["9090:9090"]
+    depends_on: [app]
+    restart: unless-stopped
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: changeme-local-only
+    ports: ["3000:3000"]
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on: [prometheus]
+    restart: unless-stopped
+volumes:
+  prometheus_data:
+  grafana_data:

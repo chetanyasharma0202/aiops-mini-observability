@@ -1,0 +1,17 @@
+groups:
+  - name: aiops-demo
+    rules:
+      - alert: DemoAppHighLatency
+        expr: demo_request_latency_seconds > 0.7
+        for: 15s
+        labels: {severity: warning, service: demo-checkout}
+        annotations:
+          summary: "Demo application latency is elevated"
+          description: "Simulated latency exceeded 700ms for 15 seconds."
+      - alert: DemoAppHighErrorRatio
+        expr: demo_http_error_ratio > 0.15
+        for: 10s
+        labels: {severity: critical, service: demo-checkout}
+        annotations:
+          summary: "Demo application error ratio is high"
+          description: "Simulated error ratio is above 15%."
