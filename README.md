@@ -27,6 +27,12 @@ docker compose ps
 ## Simulate abnormal signals
 ```bash
 SIMULATION_MODE=latency docker compose up -d --force-recreate app
+<OR>
+SIMULATION_MODE=database docker compose up -d --force-recreate app
+<OR>
+SIMULATION_MODE=cpu docker compose up -d --force-recreate app
+<OR>
+SIMULATION_MODE=errors docker compose up -d --force-recreate app
 curl -s http://localhost:8000/aiops/status
 docker compose logs --tail=50 app
 ```
