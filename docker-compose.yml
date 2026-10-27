@@ -17,7 +17,7 @@ services:
     depends_on: [app]
     restart: unless-stopped
     extra_hosts:
-      - "14.99.95.121"
+      - "host.docker.internal:host-gateway"
   grafana:
     image: grafana/grafana:latest
     environment:
