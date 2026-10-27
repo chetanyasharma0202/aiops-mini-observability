@@ -17,7 +17,7 @@ services:
     depends_on: [app]
     restart: unless-stopped
     extra_hosts:
-      - "192.168.19.20:9100"
+      - "192.168.19.20"
   grafana:
     image: grafana/grafana:latest
     environment:
