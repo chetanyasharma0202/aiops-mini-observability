@@ -7,3 +7,9 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: ["app:8000"]
+  - job_name: 'node-exporter-local'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['localhost:9100']
+        labels:
+          instance: 'local-vm'    
